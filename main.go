@@ -45,6 +45,7 @@ func main() {
 		slog.Error("dial error:", "msg", err)
 		os.Exit(1)
 	}
+	slog.Info("started a tcp server on port 25565")
 
 	for {
 		conn, err := srv.Accept()
@@ -66,4 +67,40 @@ func handleConnection(conn net.Conn) {
 	}
 
 	slog.Info("successfully read data from connection", "data", buf.String())
+
+	switch state.CurrentState {
+	case Handshake:
+		slog.Info("handling handshake state case")
+
+		slog.Debug("handle the state")
+		err := ParseHandshakePacket(buf.Bytes())
+
+		if err != nil {
+			slog.Error("error parsing handshake", "msg", err)
+			return
+		}
+
+		state.ChangeConnectionState(Status)
+
+	}
 }
+
+type ServerData struct {
+	Address         string
+	ProtocolVersion int
+	Port            int16
+	NextState       ConnectionState
+}
+
+func ParseHandshakePacket(data []byte) error {
+	packetLength, err := util.VarInt(data)
+	if err != nil {
+		return err
+	}
+
+	slog.Debug("parsed packet length", "value", packetLength)
+
+	return nil
+
+}
+
