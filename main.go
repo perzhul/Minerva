@@ -6,7 +6,36 @@ import (
 	"log/slog"
 	"net"
 	"os"
+
+	"github.com/perzhul/Minerva/protocol/util"
 )
+
+type ConnectionState uint8
+
+const (
+	Handshake ConnectionState = iota
+	Status
+	Login
+	Transfer
+)
+
+type ServerState struct {
+	CurrentState ConnectionState
+}
+
+func NewServerState() ServerState {
+	return ServerState{
+		CurrentState: Handshake,
+	}
+}
+
+func (s *ServerState) ChangeConnectionState(nextState ConnectionState) {
+	s.CurrentState = nextState
+	slog.Info("changing state", "newState", nextState)
+
+}
+
+var state = NewServerState()
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
