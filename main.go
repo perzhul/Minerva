@@ -35,24 +35,6 @@ func (s ConnectionState) String() string {
 	}
 }
 
-type ServerState struct {
-	CurrentState ConnectionState
-}
-
-func NewServerState() ServerState {
-	return ServerState{
-		CurrentState: Handshake,
-	}
-}
-
-func (s *ServerState) changeConnectionState(nextState ConnectionState) {
-	s.CurrentState = nextState
-	slog.Info("changing state", "newState", nextState)
-
-}
-
-var state = NewServerState()
-
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
@@ -82,37 +64,67 @@ func handleConnection(conn net.Conn) {
 
 	}(conn)
 
-	reader := bufio.NewReader(conn)
+	ctx := &ClientContext{
+		conn:   conn,
+		reader: bufio.NewReader(conn),
+		state:  Handshake,
+	}
 
-	packetLength, err := varint.ReadUvarint(reader)
+	for {
+		if err := ctx.handleNextPacket(); err != nil {
+			slog.Error("connection error", "msg", err)
+			return
+		}
+	}
+
+}
+
+type ClientContext struct {
+	conn   net.Conn
+	reader *bufio.Reader
+	state  ConnectionState
+}
+
+func (ctx *ClientContext) changeState(newState ConnectionState) {
+	oldState := ctx.state
+	ctx.state = newState
+	slog.Debug(
+		"state change",
+		"old state", oldState,
+		"new state", ctx.state,
+	)
+}
+
+func (ctx *ClientContext) handleNextPacket() error {
+	packetLength, err := varint.ReadUvarint(ctx.reader)
 	if err != nil {
-		slog.Error("error reading packet length", "msg", err)
-		return
+		slog.Error("", "msg", err)
+		return errors.New("error reading packet length")
 	}
 
 	slog.Debug("packetLength", "val", packetLength)
 
 	buf := make([]byte, packetLength)
 
-	if _, err := reader.Read(buf); err != nil {
-		slog.Error("error reading bytes from connection", "msg", err)
-		return
+	if _, err := ctx.reader.Read(buf); err != nil {
+		return errors.New("error reading bytes from connection")
 	}
 
-	switch state.CurrentState {
+	switch ctx.state {
+	//TODO: add other cases
 	case Handshake:
 		slog.Info("handling handshake state case")
 
-		slog.Debug("handle the state")
 		handshakePacket, err := parseHandshakePacket(buf)
 		if err != nil {
-			slog.Error("error parsing handshake packet", "msg", err)
-			return
+			return errors.New("error parsing handshake packet")
 		}
 
 		slog.Debug("handshake packet", "value", handshakePacket)
-		state.changeConnectionState(handshakePacket.NextState)
+		ctx.changeState(handshakePacket.NextState)
 	}
+
+	return nil
 }
 
 type HandshakePacket struct {
@@ -152,6 +164,7 @@ func parseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err err
 
 var ErrStringTooBig = errors.New("String is too big")
 
+// TODO: move into protocol package for clearer usage
 func String(buf []byte) (val string, n int) {
 	stringLength, n := binary.Uvarint(buf)
 	buf = cutSlice(buf, n)
