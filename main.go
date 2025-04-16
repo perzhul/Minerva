@@ -20,6 +20,21 @@ const (
 	Transfer
 )
 
+func (s ConnectionState) String() string {
+	switch s {
+	case Handshake:
+		return "Handshake"
+	case Status:
+		return "Status"
+	case Login:
+		return "Login"
+	case Transfer:
+		return "Transfer"
+	default:
+		return "Unknown"
+	}
+}
+
 type ServerState struct {
 	CurrentState ConnectionState
 }
@@ -69,7 +84,12 @@ func handleConnection(conn net.Conn) {
 
 	reader := bufio.NewReader(conn)
 
-	packetLength, _ := varint.ReadUvarint(reader)
+	packetLength, err := varint.ReadUvarint(reader)
+	if err != nil {
+		slog.Error("error reading packet length", "msg", err)
+		return
+	}
+
 	slog.Debug("packetLength", "val", packetLength)
 
 	buf := make([]byte, packetLength)
@@ -84,9 +104,11 @@ func handleConnection(conn net.Conn) {
 		slog.Info("handling handshake state case")
 
 		slog.Debug("handle the state")
-		bufCp := make([]byte, len(buf))
-		copy(bufCp, buf)
-		handshakePacket := parseHandshakePacket(bufCp)
+		handshakePacket, err := parseHandshakePacket(buf)
+		if err != nil {
+			slog.Error("error parsing handshake packet", "msg", err)
+			return
+		}
 
 		slog.Debug("handshake packet", "value", handshakePacket)
 		state.changeConnectionState(handshakePacket.NextState)
@@ -100,9 +122,7 @@ type HandshakePacket struct {
 	NextState       ConnectionState
 }
 
-func parseHandshakePacket(data []byte) HandshakePacket {
-	var handshakePacket HandshakePacket
-
+func parseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err error) {
 	// packet ID takes one byte
 	packetID := data[0]
 	slog.Debug("handshake", "packet ID", packetID)
@@ -116,6 +136,10 @@ func parseHandshakePacket(data []byte) HandshakePacket {
 	handshakePacket.Address = serverAddress
 	data = cutSlice(data, n)
 
+	if len(data) < 2 {
+		return handshakePacket, errors.New("not enough bytes")
+	}
+
 	serverPort := data[:2]
 	handshakePacket.Port = serverPort
 	data = cutSlice(data, 2)
@@ -123,7 +147,7 @@ func parseHandshakePacket(data []byte) HandshakePacket {
 	nextState := ConnectionState(data[0])
 	handshakePacket.NextState = nextState
 
-	return handshakePacket
+	return handshakePacket, nil
 }
 
 var ErrStringTooBig = errors.New("String is too big")
