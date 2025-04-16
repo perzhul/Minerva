@@ -1,13 +1,14 @@
 package main
 
 import (
-	"bytes"
-	"io"
+	"bufio"
+	"encoding/binary"
+	"errors"
 	"log/slog"
 	"net"
 	"os"
 
-	"github.com/perzhul/Minerva/protocol/util"
+	"github.com/multiformats/go-varint"
 )
 
 type ConnectionState uint8
@@ -29,7 +30,7 @@ func NewServerState() ServerState {
 	}
 }
 
-func (s *ServerState) ChangeConnectionState(nextState ConnectionState) {
+func (s *ServerState) changeConnectionState(nextState ConnectionState) {
 	s.CurrentState = nextState
 	slog.Info("changing state", "newState", nextState)
 
@@ -58,49 +59,85 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) {
-	var buf bytes.Buffer
+	defer func(conn net.Conn) {
+		err := conn.Close()
+		if err != nil {
+			slog.Error("closing connection", "err", err)
+		}
 
-	_, err := io.Copy(&buf, conn)
-	if err != nil {
+	}(conn)
+
+	reader := bufio.NewReader(conn)
+
+	packetLength, _ := varint.ReadUvarint(reader)
+	slog.Debug("packetLength", "val", packetLength)
+
+	buf := make([]byte, packetLength)
+
+	if _, err := reader.Read(buf); err != nil {
 		slog.Error("error reading bytes from connection", "msg", err)
 		return
 	}
-
-	slog.Info("successfully read data from connection", "data", buf.String())
 
 	switch state.CurrentState {
 	case Handshake:
 		slog.Info("handling handshake state case")
 
 		slog.Debug("handle the state")
-		err := ParseHandshakePacket(buf.Bytes())
+		bufCp := make([]byte, len(buf))
+		copy(bufCp, buf)
+		handshakePacket := parseHandshakePacket(bufCp)
 
-		if err != nil {
-			slog.Error("error parsing handshake", "msg", err)
-			return
-		}
-
-		state.ChangeConnectionState(Status)
-
+		slog.Debug("handshake packet", "value", handshakePacket)
+		state.changeConnectionState(handshakePacket.NextState)
 	}
 }
 
-type ServerData struct {
+type HandshakePacket struct {
 	Address         string
-	ProtocolVersion int
-	Port            int16
+	ProtocolVersion uint64
+	Port            []byte
 	NextState       ConnectionState
 }
 
-func ParseHandshakePacket(data []byte) error {
-	packetLength, err := util.VarInt(data)
-	if err != nil {
-		return err
-	}
+func parseHandshakePacket(data []byte) HandshakePacket {
+	var handshakePacket HandshakePacket
 
-	slog.Debug("parsed packet length", "value", packetLength)
+	// packet ID takes one byte
+	packetID := data[0]
+	slog.Debug("handshake", "packet ID", packetID)
+	data = cutSlice(data, 1)
 
-	return nil
+	protocolVersion, n := binary.Uvarint(data)
+	handshakePacket.ProtocolVersion = protocolVersion
+	data = cutSlice(data, n)
+
+	serverAddress, n := String(data)
+	handshakePacket.Address = serverAddress
+	data = cutSlice(data, n)
+
+	serverPort := data[:2]
+	handshakePacket.Port = serverPort
+	data = cutSlice(data, 2)
+
+	nextState := ConnectionState(data[0])
+	handshakePacket.NextState = nextState
+
+	return handshakePacket
+}
+
+var ErrStringTooBig = errors.New("String is too big")
+
+func String(buf []byte) (val string, n int) {
+	stringLength, n := binary.Uvarint(buf)
+	buf = cutSlice(buf, n)
+
+	stringPart := buf[:stringLength]
+
+	return string(stringPart), len(stringPart) + n
 
 }
 
+func cutSlice(slice []byte, offset int) []byte {
+	return slice[offset:]
+}
