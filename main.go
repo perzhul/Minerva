@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/multiformats/go-varint"
+	"github.com/perzhul/Minerva/protocol"
 	"github.com/perzhul/Minerva/protocol/status"
 )
 
@@ -205,7 +206,7 @@ func parseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err err
 		return handshakePacket, err
 	}
 
-	serverAddress, err := String(r)
+	serverAddress, err := protocol.String(r)
 	if err != nil {
 		return handshakePacket, err
 	}
@@ -233,19 +234,3 @@ func parseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err err
 }
 
 var ErrStringTooBig = errors.New("String is too big")
-
-// TODO: move into protocol package for clearer usage
-func String(r *bufio.Reader) (string, error) {
-	length, err := varint.ReadUvarint(r) // it already read those bytes
-	if err != nil {
-		return "", err
-	}
-
-	strBytes := make([]byte, length)
-	_, err = r.Read(strBytes)
-	if err != nil {
-		return "", err
-	}
-
-	return string(strBytes), nil
-}
