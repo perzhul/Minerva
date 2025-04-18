@@ -2,13 +2,15 @@ package main
 
 import (
 	"bufio"
-	"encoding/binary"
+	"bytes"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
 	"os"
 
 	"github.com/multiformats/go-varint"
+	"github.com/perzhul/Minerva/protocol/status"
 )
 
 type ConnectionState uint8
@@ -33,6 +35,17 @@ func (s ConnectionState) String() string {
 	default:
 		return "Unknown"
 	}
+}
+
+type Server struct {
+	Version  string // 1.25.1
+	Protocol []byte
+	// TODO: fill with properties, players, status, etc.
+}
+
+var srvData = Server{
+	Version:  "1.25.1",
+	Protocol: varint.ToUvarint(uint64(770)),
 }
 
 func main() {
@@ -113,7 +126,7 @@ func (ctx *ClientContext) handleNextPacket() error {
 	switch ctx.state {
 	//TODO: add other cases
 	case Handshake:
-		slog.Info("handling handshake state case")
+		slog.Debug("handling handshake state case")
 
 		handshakePacket, err := parseHandshakePacket(buf)
 		if err != nil {
@@ -122,6 +135,51 @@ func (ctx *ClientContext) handleNextPacket() error {
 
 		slog.Debug("handshake packet", "value", handshakePacket)
 		ctx.changeState(handshakePacket.NextState)
+	case Status:
+		slog.Debug("handling the status case")
+
+		version := status.Version{
+			Name:     srvData.Version,
+			Protocol: varint.ToUvarint(uint64(770)),
+		}
+
+		packetData := struct {
+			Version            status.Version `json:"version"`
+			EnforcesSecureChat bool           `json:"enforcesSecureChat"`
+		}{
+			Version:            version,
+			EnforcesSecureChat: false,
+		}
+
+		jsonData, err := json.Marshal(packetData)
+		if err != nil {
+			slog.Error("error marshalling struct", "msg", err)
+		}
+
+		packetID := status.StatusResponsePacketID
+
+		jsonLengthPrefix := varint.ToUvarint(uint64(len(jsonData)))
+
+		payload := []byte{}
+
+		payload = append(payload, packetID)
+		payload = append(payload, jsonLengthPrefix...)
+		payload = append(payload, jsonData...)
+
+		payloadLengthPrefix := varint.ToUvarint(uint64(len(payload)))
+
+		data := append(payloadLengthPrefix, payload...)
+
+		n, err := ctx.conn.Write(data)
+		if err != nil {
+			slog.Error(
+				"error writing to connection",
+				"msg", err,
+				"tried to write", data,
+			)
+		}
+		slog.Info("bytes wrote", "n", n)
+
 	}
 
 	return nil
@@ -135,46 +193,59 @@ type HandshakePacket struct {
 }
 
 func parseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err error) {
-	// packet ID takes one byte
-	packetID := data[0]
+	r := bufio.NewReader(bytes.NewReader(data))
+	packetID, err := r.ReadByte()
+	if err != nil {
+		return handshakePacket, err
+	}
 	slog.Debug("handshake", "packet ID", packetID)
-	data = cutSlice(data, 1)
 
-	protocolVersion, n := binary.Uvarint(data)
-	handshakePacket.ProtocolVersion = protocolVersion
-	data = cutSlice(data, n)
+	protocolVersion, err := varint.ReadUvarint(r)
+	if err != nil {
+		return handshakePacket, err
+	}
 
-	serverAddress, n := String(data)
-	handshakePacket.Address = serverAddress
-	data = cutSlice(data, n)
+	serverAddress, err := String(r)
+	if err != nil {
+		return handshakePacket, err
+	}
 
 	if len(data) < 2 {
 		return handshakePacket, errors.New("not enough bytes")
 	}
 
-	serverPort := data[:2]
-	handshakePacket.Port = serverPort
-	data = cutSlice(data, 2)
+	serverPort := make([]byte, 2)
+	if _, err := r.Read(serverPort); err != nil {
+		return handshakePacket, err
+	}
 
-	nextState := ConnectionState(data[0])
-	handshakePacket.NextState = nextState
+	nextState, err := r.ReadByte()
+	if err != nil {
+		return handshakePacket, err
+	}
 
-	return handshakePacket, nil
+	return HandshakePacket{
+		Address:         serverAddress,
+		ProtocolVersion: protocolVersion,
+		Port:            serverPort,
+		NextState:       ConnectionState(nextState),
+	}, nil
 }
 
 var ErrStringTooBig = errors.New("String is too big")
 
 // TODO: move into protocol package for clearer usage
-func String(buf []byte) (val string, n int) {
-	stringLength, n := binary.Uvarint(buf)
-	buf = cutSlice(buf, n)
+func String(r *bufio.Reader) (string, error) {
+	length, err := varint.ReadUvarint(r) // it already read those bytes
+	if err != nil {
+		return "", err
+	}
 
-	stringPart := buf[:stringLength]
+	strBytes := make([]byte, length)
+	_, err = r.Read(strBytes)
+	if err != nil {
+		return "", err
+	}
 
-	return string(stringPart), len(stringPart) + n
-
-}
-
-func cutSlice(slice []byte, offset int) []byte {
-	return slice[offset:]
+	return string(strBytes), nil
 }
