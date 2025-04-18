@@ -1,7 +1,5 @@
 package status
 
-import "go.minekube.com/common/minecraft/component"
-
 const StatusResponsePacketID byte = 0x00
 
 type Response struct {
@@ -29,7 +27,5 @@ type Sample struct {
 }
 
 type Description struct {
-	Text TextComponent `json:"text"`
+	Text string `json:"text"`
 }
-
-type TextComponent component.Text

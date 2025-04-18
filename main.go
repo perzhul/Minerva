@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 
 	"github.com/multiformats/go-varint"
+	"github.com/perzhul/Minerva/config"
 	"github.com/perzhul/Minerva/protocol"
 	"github.com/perzhul/Minerva/protocol/status"
 )
@@ -38,15 +41,15 @@ func (s ConnectionState) String() string {
 	}
 }
 
-type Server struct {
-	Version  string // 1.25.1
-	Protocol []byte
-	// TODO: fill with properties, players, status, etc.
+type ServerConfig struct {
+	Version    string // 1.25.1
+	MaxPlayers uint64
 }
 
-var srvData = Server{
-	Version:  "1.25.1",
-	Protocol: varint.ToUvarint(uint64(770)),
+type ServerState struct {
+	mu            sync.RWMutex
+	cfg           *ServerConfig
+	OnlinePlayers uint64
 }
 
 func main() {
@@ -59,17 +62,27 @@ func main() {
 	}
 	slog.Info("started a tcp server on port 25565")
 
+	config := ServerConfig{
+		Version:    "1.25.1",
+		MaxPlayers: 50,
+	}
+
+	state := &ServerState{
+		OnlinePlayers: 0,
+		cfg:           &config,
+	}
+
 	for {
 		conn, err := srv.Accept()
 		if err != nil {
 			slog.Error("accepting connection", "msg", err)
 		}
 
-		go handleConnection(conn)
+		go handleConnection(conn, state)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, state *ServerState) {
 	defer func(conn net.Conn) {
 		err := conn.Close()
 		if err != nil {
@@ -85,7 +98,7 @@ func handleConnection(conn net.Conn) {
 	}
 
 	for {
-		if err := ctx.handleNextPacket(); err != nil {
+		if err := ctx.handleNextPacket(state); err != nil {
 			slog.Error("connection error", "msg", err)
 			return
 		}
@@ -109,7 +122,7 @@ func (ctx *ClientContext) changeState(newState ConnectionState) {
 	)
 }
 
-func (ctx *ClientContext) handleNextPacket() error {
+func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 	packetLength, err := varint.ReadUvarint(ctx.reader)
 	if err != nil {
 		slog.Error("", "msg", err)
@@ -139,20 +152,28 @@ func (ctx *ClientContext) handleNextPacket() error {
 	case Status:
 		slog.Debug("handling the status case")
 
-		version := status.Version{
-			Name:     srvData.Version,
-			Protocol: varint.ToUvarint(uint64(770)),
+		favicon, err := encodeImageToFavicon(config.FAVICON_PATH)
+		if err != nil {
+			slog.Error("error encoding to favicon", "msg", err)
 		}
 
-		packetData := struct {
-			Version            status.Version `json:"version"`
-			EnforcesSecureChat bool           `json:"enforcesSecureChat"`
-		}{
-			Version:            version,
+		statusResponse := status.Response{
+			Version: status.Version{
+				Name:     "1.25.1",
+				Protocol: varint.ToUvarint(uint64(770)),
+			},
+			Players: &status.Players{
+				Max:    state.cfg.MaxPlayers,
+				Online: state.OnlinePlayers,
+			},
+			Description: &status.Description{
+				Text: "Hello, world!",
+			},
+			Favicon:            favicon,
 			EnforcesSecureChat: false,
 		}
 
-		jsonData, err := json.Marshal(packetData)
+		jsonData, err := json.Marshal(statusResponse)
 		if err != nil {
 			slog.Error("error marshalling struct", "msg", err)
 		}
@@ -233,4 +254,13 @@ func parseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err err
 	}, nil
 }
 
-var ErrStringTooBig = errors.New("String is too big")
+func encodeImageToFavicon(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(data)
+
+	return "data:image/png;base64," + encoded, nil
+}
