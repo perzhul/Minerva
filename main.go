@@ -13,6 +13,7 @@ import (
 	"github.com/perzhul/Minerva/config"
 	"github.com/perzhul/Minerva/protocol"
 	"github.com/perzhul/Minerva/protocol/handshake"
+	"github.com/perzhul/Minerva/protocol/ping"
 	"github.com/perzhul/Minerva/protocol/status"
 )
 
@@ -30,7 +31,10 @@ type ServerState struct {
 }
 
 func main() {
-	slog.SetLogLoggerLevel(slog.LevelDebug)
+	slog := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level:     slog.LevelDebug,
+		AddSource: true,
+	}))
 
 	srv, err := net.Listen("tcp", ":25565")
 	if err != nil {
@@ -106,7 +110,7 @@ func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 		return errors.New("error reading packet length")
 	}
 
-	slog.Debug("packetLength", "val", packetLength)
+	slog.Debug("packetLength", "length", packetLength)
 
 	buf := make([]byte, packetLength)
 
@@ -129,58 +133,78 @@ func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 
 	case Status:
 		slog.Debug("handling the status case")
+		packetID := buf[0]
 
-		favicon, err := encodeImageToFavicon(config.FAVICON_PATH)
-		if err != nil {
-			slog.Error("error encoding to favicon", "msg", err)
+		switch byte(packetID) {
+		case status.StatusResponsePacketID:
+			slog.Debug("handling status response packet", "packet ID", packetID)
+			ctx.handleStatusResponsePacket(state)
+		case ping.PingPacketID:
+			slog.Debug("handling the ping request packet", "packet ID", packetID)
+			packetBuf := []byte{}
+			packetBuf = append(packetBuf, varint.ToUvarint(uint64(len(buf)))...)
+			packetBuf = append(packetBuf, buf...)
+
+			_, err = ctx.conn.Write(packetBuf)
+			if err != nil {
+				return err
+			}
 		}
-
-		statusResponse := status.Response{
-			Version: status.Version{
-				Name:     "1.25.1",
-				Protocol: varint.ToUvarint(uint64(770)),
-			},
-			Players: &status.Players{
-				Max:    state.cfg.MaxPlayers,
-				Online: state.OnlinePlayers,
-			},
-			Description: &status.Description{
-				Text: "Hello, world!",
-			},
-			Favicon:            favicon,
-			EnforcesSecureChat: false,
-		}
-
-		jsonData, err := json.Marshal(statusResponse)
-		if err != nil {
-			slog.Error("error marshalling struct", "msg", err)
-		}
-
-		packetID := status.StatusResponsePacketID
-
-		jsonLengthPrefix := varint.ToUvarint(uint64(len(jsonData)))
-
-		payload := []byte{}
-
-		payload = append(payload, packetID)
-		payload = append(payload, jsonLengthPrefix...)
-		payload = append(payload, jsonData...)
-
-		payloadLengthPrefix := varint.ToUvarint(uint64(len(payload)))
-
-		data := append(payloadLengthPrefix, payload...)
-
-		n, err := ctx.conn.Write(data)
-		if err != nil {
-			slog.Error(
-				"error writing to connection",
-				"msg", err,
-				"tried to write", data,
-			)
-		}
-		slog.Info("bytes wrote", "n", n)
 
 	}
 
 	return nil
+}
+
+func (ctx *ClientContext) handleStatusResponsePacket(state *ServerState) {
+	favicon, err := encodeImageToFavicon(config.FAVICON_PATH)
+	if err != nil {
+		slog.Error("error encoding to favicon", "msg", err)
+	}
+
+	statusResponse := status.Response{
+		Version: status.Version{
+			Name:     "1.25.1",
+			Protocol: 770,
+		},
+		Players: &status.Players{
+			Max:    state.cfg.MaxPlayers,
+			Online: state.OnlinePlayers,
+		},
+		Description: &status.Description{
+			Text: "Hello, world!",
+		},
+		Favicon:            favicon,
+		EnforcesSecureChat: false,
+	}
+
+	jsonData, err := json.Marshal(statusResponse)
+	if err != nil {
+		slog.Error("error marshalling struct", "msg", err)
+	}
+
+	packetID := status.StatusResponsePacketID
+
+	jsonLengthPrefix := varint.ToUvarint(uint64(len(jsonData)))
+
+	payload := []byte{}
+
+	payload = append(payload, packetID)
+	payload = append(payload, jsonLengthPrefix...)
+	payload = append(payload, jsonData...)
+
+	payloadLengthPrefix := varint.ToUvarint(uint64(len(payload)))
+
+	data := append(payloadLengthPrefix, payload...)
+
+	n, err := ctx.conn.Write(data)
+	if err != nil {
+		slog.Error(
+			"error writing to connection",
+			"msg", err,
+			"tried to write", data,
+		)
+	}
+	slog.Info("bytes wrote", "n", n)
+
 }

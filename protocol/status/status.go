@@ -12,7 +12,7 @@ type Response struct {
 
 type Version struct {
 	Name     string `json:"name"`
-	Protocol []byte `json:"protocol"`
+	Protocol uint64 `json:"protocol"`
 }
 
 type Players struct {
