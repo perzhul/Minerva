@@ -145,8 +145,7 @@ func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 			packetBuf = append(packetBuf, varint.ToUvarint(uint64(len(buf)))...)
 			packetBuf = append(packetBuf, buf...)
 
-			_, err = ctx.conn.Write(packetBuf)
-			if err != nil {
+			if _, err := ctx.conn.Write(packetBuf); err != nil {
 				return err
 			}
 		}
@@ -197,14 +196,13 @@ func (ctx *ClientContext) handleStatusResponsePacket(state *ServerState) {
 
 	data := append(payloadLengthPrefix, payload...)
 
-	n, err := ctx.conn.Write(data)
-	if err != nil {
+	if n, err := ctx.conn.Write(data); err != nil {
+		slog.Debug("In status response", "bytes wrote", n)
 		slog.Error(
 			"error writing to connection",
 			"msg", err,
 			"tried to write", data,
 		)
 	}
-	slog.Info("bytes wrote", "n", n)
 
 }
