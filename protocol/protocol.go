@@ -1,5 +1,29 @@
 package protocol
 
+type ConnectionState uint8
+
+func (s ConnectionState) String() string {
+	switch s {
+	case Handshake:
+		return "Handshake"
+	case Status:
+		return "Status"
+	case Login:
+		return "Login"
+	case Transfer:
+		return "Transfer"
+	default:
+		return "Unknown"
+	}
+}
+
+const (
+	Handshake ConnectionState = iota
+	Status
+	Login
+	Transfer
+)
+
 type Packet struct {
 	Length   uint64 // Length of Packet ID + Data
 	PacketID uint64 // Corresponds to protocol_id from the server's packet report

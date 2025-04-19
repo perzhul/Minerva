@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,41 +13,20 @@ import (
 	"github.com/multiformats/go-varint"
 	"github.com/perzhul/Minerva/config"
 	"github.com/perzhul/Minerva/protocol"
+	"github.com/perzhul/Minerva/protocol/handshake"
 	"github.com/perzhul/Minerva/protocol/status"
 )
 
-type ConnectionState uint8
-
 const (
-	Handshake ConnectionState = iota
+	Handshake protocol.ConnectionState = iota
 	Status
 	Login
 	Transfer
 )
 
-func (s ConnectionState) String() string {
-	switch s {
-	case Handshake:
-		return "Handshake"
-	case Status:
-		return "Status"
-	case Login:
-		return "Login"
-	case Transfer:
-		return "Transfer"
-	default:
-		return "Unknown"
-	}
-}
-
-type ServerConfig struct {
-	Version    string // 1.25.1
-	MaxPlayers uint64
-}
-
 type ServerState struct {
 	mu            sync.RWMutex
-	cfg           *ServerConfig
+	cfg           *config.ServerConfig
 	OnlinePlayers uint64
 }
 
@@ -62,14 +40,14 @@ func main() {
 	}
 	slog.Info("started a tcp server on port 25565")
 
-	config := ServerConfig{
+	config := &config.ServerConfig{
 		Version:    "1.25.1",
 		MaxPlayers: 50,
 	}
 
 	state := &ServerState{
 		OnlinePlayers: 0,
-		cfg:           &config,
+		cfg:           config,
 	}
 
 	for {
@@ -109,10 +87,10 @@ func handleConnection(conn net.Conn, state *ServerState) {
 type ClientContext struct {
 	conn   net.Conn
 	reader *bufio.Reader
-	state  ConnectionState
+	state  protocol.ConnectionState
 }
 
-func (ctx *ClientContext) changeState(newState ConnectionState) {
+func (ctx *ClientContext) changeState(newState protocol.ConnectionState) {
 	oldState := ctx.state
 	ctx.state = newState
 	slog.Debug(
@@ -142,7 +120,7 @@ func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 	case Handshake:
 		slog.Debug("handling handshake state case")
 
-		handshakePacket, err := parseHandshakePacket(buf)
+		handshakePacket, err := handshake.ParseHandshakePacket(buf)
 		if err != nil {
 			return errors.New("error parsing handshake packet")
 		}
@@ -205,53 +183,6 @@ func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 	}
 
 	return nil
-}
-
-type HandshakePacket struct {
-	Address         string
-	ProtocolVersion uint64
-	Port            []byte
-	NextState       ConnectionState
-}
-
-func parseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err error) {
-	r := bufio.NewReader(bytes.NewReader(data))
-	packetID, err := r.ReadByte()
-	if err != nil {
-		return handshakePacket, err
-	}
-	slog.Debug("handshake", "packet ID", packetID)
-
-	protocolVersion, err := varint.ReadUvarint(r)
-	if err != nil {
-		return handshakePacket, err
-	}
-
-	serverAddress, err := protocol.String(r)
-	if err != nil {
-		return handshakePacket, err
-	}
-
-	if len(data) < 2 {
-		return handshakePacket, errors.New("not enough bytes")
-	}
-
-	serverPort := make([]byte, 2)
-	if _, err := r.Read(serverPort); err != nil {
-		return handshakePacket, err
-	}
-
-	nextState, err := r.ReadByte()
-	if err != nil {
-		return handshakePacket, err
-	}
-
-	return HandshakePacket{
-		Address:         serverAddress,
-		ProtocolVersion: protocolVersion,
-		Port:            serverPort,
-		NextState:       ConnectionState(nextState),
-	}, nil
 }
 
 func encodeImageToFavicon(path string) (string, error) {
