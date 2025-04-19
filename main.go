@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -127,6 +126,7 @@ func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 
 		slog.Debug("handshake packet", "value", handshakePacket)
 		ctx.changeState(handshakePacket.NextState)
+
 	case Status:
 		slog.Debug("handling the status case")
 
@@ -183,15 +183,4 @@ func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
 	}
 
 	return nil
-}
-
-func encodeImageToFavicon(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-
-	encoded := base64.StdEncoding.EncodeToString(data)
-
-	return "data:image/png;base64," + encoded, nil
 }
