@@ -1,15 +1,11 @@
-FROM golang:1.24.2-alpine3.21
+FROM golang:1.24.2-alpine3.21 AS builder
 
+ARG CGO_ENABLED=0
 WORKDIR /app
 
 COPY . .
+RUN go mod download && go build .
 
-RUN go mod download
-
-COPY *.go ./
-
-RUN go build .
-
-EXPOSE 25565
-
-CMD [ "./Minerva" ]
+FROM scratch
+COPY --from=builder /app/Minerva /Minerva
+ENTRYPOINT ["/Minerva"]
