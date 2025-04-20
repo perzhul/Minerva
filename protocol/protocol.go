@@ -1,5 +1,7 @@
 package protocol
 
+import "fmt"
+
 type ConnectionState uint8
 
 func (s ConnectionState) String() string {
@@ -13,7 +15,7 @@ func (s ConnectionState) String() string {
 	case Transfer:
 		return "Transfer"
 	default:
-		return "Unknown"
+		return fmt.Sprintf("Unknown (%d)", int(s))
 	}
 }
 
