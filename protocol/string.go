@@ -7,6 +7,8 @@ import (
 )
 
 func String(r *bufio.Reader) (string, error) {
+	//TODO: use proper read var int compatible with
+	// minecraft format
 	length, err := varint.ReadUvarint(r) // it already read those bytes
 	if err != nil {
 		return "", err
