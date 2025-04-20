@@ -7,25 +7,24 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"sync"
 
 	"github.com/multiformats/go-varint"
 	"github.com/perzhul/Minerva/config"
 	"github.com/perzhul/Minerva/protocol"
 	"github.com/perzhul/Minerva/protocol/handshake"
+	"github.com/perzhul/Minerva/protocol/login"
 	"github.com/perzhul/Minerva/protocol/ping"
 	"github.com/perzhul/Minerva/protocol/status"
 )
 
 const (
-	Handshake protocol.ConnectionState = iota
+	Handshaking protocol.ConnectionState = iota
 	Status
 	Login
 	Transfer
 )
 
 type ServerState struct {
-	mu            sync.RWMutex
 	cfg           *config.ServerConfig
 	OnlinePlayers uint64
 }
@@ -49,7 +48,7 @@ func main() {
 	}
 
 	state := &ServerState{
-		OnlinePlayers: 0,
+		OnlinePlayers: 1,
 		cfg:           config,
 	}
 
@@ -75,7 +74,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 	ctx := &ClientContext{
 		conn:   conn,
 		reader: bufio.NewReader(conn),
-		state:  Handshake,
+		state:  Handshaking,
 	}
 
 	for {
@@ -96,7 +95,7 @@ type ClientContext struct {
 func (ctx *ClientContext) changeState(newState protocol.ConnectionState) {
 	oldState := ctx.state
 	ctx.state = newState
-	slog.Debug(
+	slog.Info(
 		"state change",
 		"old state", oldState,
 		"new state", ctx.state,
@@ -104,67 +103,101 @@ func (ctx *ClientContext) changeState(newState protocol.ConnectionState) {
 }
 
 func (ctx *ClientContext) handleNextPacket(state *ServerState) error {
-	packetLength, err := varint.ReadUvarint(ctx.reader)
+	packetLength, err := handshake.ReadVarInt(ctx.reader)
 	if err != nil {
-		slog.Error("", "msg", err)
-		return errors.New("error reading packet length")
+		return err
 	}
-
-	slog.Debug("packetLength", "length", packetLength)
 
 	buf := make([]byte, packetLength)
 
 	if _, err := ctx.reader.Read(buf); err != nil {
-		return errors.New("error reading bytes from connection")
+		return errors.Join(errors.New("error reading from the connection"), err)
 	}
 
+	packetID := buf[0] // because the length prefix is already read from the buffer
+
 	switch ctx.state {
-	//TODO: add other cases
-	case Handshake:
+	case Handshaking:
 		slog.Debug("handling handshake state case")
 
 		handshakePacket, err := handshake.ParseHandshakePacket(buf)
+		state.cfg.ProtocolVersion = handshakePacket.ProtocolVersion
+
 		if err != nil {
 			return errors.New("error parsing handshake packet")
 		}
 
 		slog.Debug("handshake packet", "value", handshakePacket)
+
 		ctx.changeState(handshakePacket.NextState)
+
+		slog.Debug("changed state", "current state", ctx.state)
 
 	case Status:
 		slog.Debug("handling the status case")
-		packetID := buf[0]
 
 		switch byte(packetID) {
 		case status.StatusResponsePacketID:
 			slog.Debug("handling status response packet", "packet ID", packetID)
-			ctx.handleStatusResponsePacket(state)
+			if err := ctx.handleStatusResponsePacket(state); err != nil {
+				slog.Error("handling status response packet")
+				return err
+			}
+
 		case ping.PingPacketID:
 			slog.Debug("handling the ping request packet", "packet ID", packetID)
-			packetBuf := []byte{}
-			packetBuf = append(packetBuf, varint.ToUvarint(uint64(len(buf)))...)
-			packetBuf = append(packetBuf, buf...)
-
-			if _, err := ctx.conn.Write(packetBuf); err != nil {
+			if err := ctx.handlePingPacket(buf); err != nil {
+				slog.Error("handling ping packet")
 				return err
 			}
 		}
-
+	case Login:
+		slog.Debug("handling login packet...")
+		if err := ctx.handleLoginPacket(buf); err != nil {
+			slog.Error("handling login packet")
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (ctx *ClientContext) handleStatusResponsePacket(state *ServerState) {
+func (ctx *ClientContext) handleLoginPacket(data []byte) error {
+	loginPacket, err := login.ParseLoginPacket(data)
+	if err != nil {
+		return err
+	}
+
+	slog.Info("parsed login packet",
+		"username", loginPacket.Name,
+		"user UUID", loginPacket.UUID,
+	)
+
+	return nil
+}
+
+func (ctx *ClientContext) handlePingPacket(data []byte) error {
+	packetBuf := []byte{}
+	packetBuf = append(packetBuf, varint.ToUvarint(uint64(len(data)))...)
+	packetBuf = append(packetBuf, data...)
+
+	if _, err := ctx.conn.Write(packetBuf); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (ctx *ClientContext) handleStatusResponsePacket(state *ServerState) error {
 	favicon, err := encodeImageToFavicon(config.FAVICON_PATH)
 	if err != nil {
-		slog.Error("error encoding to favicon", "msg", err)
+		return err
 	}
 
 	statusResponse := status.Response{
 		Version: status.Version{
-			Name:     "1.25.1",
-			Protocol: 770,
+			Name:     state.cfg.Version,
+			Protocol: state.cfg.ProtocolVersion,
 		},
 		Players: &status.Players{
 			Max:    state.cfg.MaxPlayers,
@@ -179,7 +212,7 @@ func (ctx *ClientContext) handleStatusResponsePacket(state *ServerState) {
 
 	jsonData, err := json.Marshal(statusResponse)
 	if err != nil {
-		slog.Error("error marshalling struct", "msg", err)
+		return err
 	}
 
 	packetID := status.StatusResponsePacketID
@@ -196,13 +229,10 @@ func (ctx *ClientContext) handleStatusResponsePacket(state *ServerState) {
 
 	data := append(payloadLengthPrefix, payload...)
 
-	if n, err := ctx.conn.Write(data); err != nil {
-		slog.Debug("In status response", "bytes wrote", n)
-		slog.Error(
-			"error writing to connection",
-			"msg", err,
-			"tried to write", data,
-		)
+	if _, err := ctx.conn.Write(data); err != nil {
+		return err
 	}
+
+	return nil
 
 }

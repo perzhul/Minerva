@@ -1,5 +1,7 @@
 package status
 
+import "github.com/perzhul/Minerva/types"
+
 const StatusResponsePacketID byte = 0x00
 
 type Response struct {
@@ -11,8 +13,8 @@ type Response struct {
 }
 
 type Version struct {
-	Name     string `json:"name"`
-	Protocol uint64 `json:"protocol"`
+	Name     string       `json:"name"`
+	Protocol types.Varint `json:"protocol"`
 }
 
 type Players struct {

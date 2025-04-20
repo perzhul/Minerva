@@ -4,15 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 
-	"github.com/multiformats/go-varint"
 	"github.com/perzhul/Minerva/protocol"
+	"github.com/perzhul/Minerva/types"
 )
 
 type HandshakePacket struct {
 	Address         string
-	ProtocolVersion uint64
+	ProtocolVersion types.Varint
 	Port            []byte
 	NextState       protocol.ConnectionState
 }
@@ -25,7 +27,7 @@ func ParseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err err
 	}
 	slog.Debug("handshake", "packet ID", packetID)
 
-	protocolVersion, err := varint.ReadUvarint(r)
+	protocolVersion, err := ReadVarInt(r)
 	if err != nil {
 		return handshakePacket, err
 	}
@@ -55,4 +57,21 @@ func ParseHandshakePacket(data []byte) (handshakePacket HandshakePacket, err err
 		Port:            serverPort,
 		NextState:       protocol.ConnectionState(nextState),
 	}, nil
+}
+
+func ReadVarInt(r io.ByteReader) (types.Varint, error) {
+	var num int32
+	var shift uint
+	for range 5 { // max 5 bytes
+		b, err := r.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		num |= int32(b&0x7F) << shift
+		if (b & 0x80) == 0 {
+			return types.Varint(num), nil
+		}
+		shift += 7
+	}
+	return 0, fmt.Errorf("VarInt is too big")
 }
